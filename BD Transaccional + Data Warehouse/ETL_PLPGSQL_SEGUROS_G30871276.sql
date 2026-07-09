@@ -1,5 +1,4 @@
--- ============================================================================
---  ETL SEGUROS ALTA VISTA  -  PROYECTO BI FASE II - PUNTO 3
+
 --  Implementacion en lenguaje procedimental PL/pgSQL (PostgreSQL)
 --  Fuente:  seguro_g30871276      ->      Almacen:  seguro_dw_g30871276
 --  Panza / Mejia / De Sousa
@@ -13,8 +12,14 @@
 --  Patrones aplicados:
 --    * Dimensiones : SCD Tipo 1. Se recorre la fuente FILA POR FILA con un
 --                    CURSOR; si la clave natural ya existe se hace UPDATE, si no,
---                    se calcula la clave subrogada (SK = maximo actual + 1) e INSERT.
+--                    se INSERTA con una clave subrogada generada por una SECUENCIA
+--                    de PostgreSQL (nextval) -el conteo lo lleva el motor, no un
+--                    calculo manual-.
 --    * DIM_TIEMPO  : GENERADA, no extraida. Bucle WHILE dia a dia 2018-2031.
+--                    Usa SMART KEY: la clave subrogada es la fecha en formato
+--                    AAAAMMDD (ej. 2024-03-01 -> 20240301), no un correlativo.
+--                    Asi, al ver la SK en una tabla de hechos se lee la fecha
+--                    directamente, sin necesidad de cruzar con DIM_TIEMPO.
 --    * Hechos      : CARGA INCREMENTAL (patron Merge + Synchronize de la catedra),
 --                    NO full refresh. Por cada registro de la fuente:
 --                      - se resuelven las SK con lookups,
@@ -46,6 +51,35 @@
 
 SET search_path TO seguro_dw_g30871276;
 
+-- ----------------------------------------------------------------------------
+--  Secuencias para las claves subrogadas de las dimensiones (una por dimension).
+--  El motor lleva el conteo con nextval(); cada procedimiento sincroniza su
+--  secuencia con el estado actual de la tabla antes de insertar (idempotencia).
+--  DIM_TIEMPO no usa secuencia: su clave es una smart key AAAAMMDD.
+-- ----------------------------------------------------------------------------
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_cliente;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_producto;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_contrato;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_estado_contrato;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_evaluacion;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_sucursal;
+CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_siniestro;
+
+-- ----------------------------------------------------------------------------
+--  Smart Key de DIM_TIEMPO: la SK de una fecha se CALCULA, no se busca.
+--  STRICT: si p_fecha es NULL, devuelve NULL sin necesidad de IF en el caller
+--  (caso de sk_fecha_respuesta en FACT_REGISTRO_SINIESTRO, que puede no existir).
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION seguro_dw_g30871276.fn_sk_tiempo(p_fecha DATE)
+RETURNS INTEGER
+LANGUAGE sql
+IMMUTABLE STRICT
+AS $$
+    SELECT EXTRACT(YEAR FROM p_fecha)::int * 10000
+         + EXTRACT(MONTH FROM p_fecha)::int * 100
+         + EXTRACT(DAY FROM p_fecha)::int;
+$$;
+
 
 -- ============================================================================
 --  1. DIM_TIEMPO  (generada con un bucle dia a dia)
@@ -67,8 +101,7 @@ DECLARE
     c_meses     CONSTANT TEXT[] := ARRAY['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     c_meses_cor CONSTANT TEXT[] := ARRAY['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 BEGIN
-    RAISE NOTICE '-> DIM_TIEMPO: generando calendario % a %', c_fecha_ini, c_fecha_fin;
-    SELECT COALESCE(MAX(sk_dim_tiempo), 0) INTO v_sk FROM seguro_dw_g30871276.dim_tiempo;
+    RAISE NOTICE '-> DIM_TIEMPO: generando calendario % a % (smart key AAAAMMDD)', c_fecha_ini, c_fecha_fin;
 
     v_fecha := c_fecha_ini;
     WHILE v_fecha <= c_fecha_fin LOOP
@@ -76,7 +109,8 @@ BEGIN
                        WHERE t.fecha_completa = v_fecha) THEN
             v_dow := EXTRACT(DOW   FROM v_fecha)::int;
             v_mes := EXTRACT(MONTH FROM v_fecha)::int;
-            v_sk  := v_sk + 1;
+            -- SMART KEY: la clave subrogada ES la fecha en formato AAAAMMDD
+            v_sk  := EXTRACT(YEAR FROM v_fecha)::int * 10000 + v_mes * 100 + EXTRACT(DAY FROM v_fecha)::int;
             INSERT INTO seguro_dw_g30871276.dim_tiempo
                   (sk_dim_tiempo, cod_annio, cod_mes, cod_dia_annio, cod_dia_mes,
                    cod_dia_semana, cod_semana, desc_dia_semana, desc_dia_semana_corta,
@@ -112,8 +146,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_CLIENTE (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_cliente), 0) INTO v_sk
-    FROM seguro_dw_g30871276.dim_cliente WHERE sk_dim_cliente > 0;
+    v_sk := COALESCE((SELECT MAX(sk_dim_cliente) FROM seguro_dw_g30871276.dim_cliente WHERE sk_dim_cliente > 0), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_cliente', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_cliente', v_sk, true); END IF;
 
     FOR r IN SELECT cod_cliente, nb_cliente, ci_rif, telefono, direccion, sexo, email
              FROM seguro_g30871276.cliente ORDER BY cod_cliente
@@ -125,10 +160,9 @@ BEGIN
              WHERE cod_cliente_nk = r.cod_cliente;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_cliente
                   (sk_dim_cliente, cod_cliente_nk, nb_cliente, ci_rif, telefono, direccion, sexo, email)
-            VALUES (v_sk, r.cod_cliente, r.nb_cliente, r.ci_rif, r.telefono, r.direccion, r.sexo, r.email);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_cliente'), r.cod_cliente, r.nb_cliente, r.ci_rif, r.telefono, r.direccion, r.sexo, r.email);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -154,8 +188,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_PRODUCTO (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_producto), 0) INTO v_sk
-    FROM seguro_dw_g30871276.dim_producto WHERE sk_dim_producto > 0;
+    v_sk := COALESCE((SELECT MAX(sk_dim_producto) FROM seguro_dw_g30871276.dim_producto WHERE sk_dim_producto > 0), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_producto', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_producto', v_sk, true); END IF;
 
     FOR r IN SELECT p.cod_producto, p.nb_producto, p.descripcion, p.calificacion,
                     p.cod_tipo_producto, tp.nb_tipo_producto
@@ -171,11 +206,10 @@ BEGIN
              WHERE cod_producto_nk = r.cod_producto;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_producto
                   (sk_dim_producto, cod_producto_nk, nb_producto, descrip_producto,
                    cod_tipo_producto, nb_tipo_producto, calificacion)
-            VALUES (v_sk, r.cod_producto, r.nb_producto, r.descripcion,
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_producto'), r.cod_producto, r.nb_producto, r.descripcion,
                     r.cod_tipo_producto::varchar, r.nb_tipo_producto, r.calificacion);
             v_altas := v_altas + 1;
         END IF;
@@ -196,8 +230,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_CONTRATO (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_contrato), 0) INTO v_sk
-    FROM seguro_dw_g30871276.dim_contrato WHERE sk_dim_contrato > 0;
+    v_sk := COALESCE((SELECT MAX(sk_dim_contrato) FROM seguro_dw_g30871276.dim_contrato WHERE sk_dim_contrato > 0), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_contrato', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_contrato', v_sk, true); END IF;
 
     FOR r IN SELECT nro_contrato, descrip_contrato
              FROM seguro_g30871276.contrato ORDER BY nro_contrato
@@ -207,9 +242,8 @@ BEGIN
                SET descrip_contrato = r.descrip_contrato WHERE nro_contrato_nk = r.nro_contrato;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_contrato (sk_dim_contrato, nro_contrato_nk, descrip_contrato)
-            VALUES (v_sk, r.nro_contrato, r.descrip_contrato);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_contrato'), r.nro_contrato, r.descrip_contrato);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -234,16 +268,17 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_ESTADO_CONTRATO (dominio fijo)';
-    SELECT COALESCE(MAX(sk_dim_estado_contrato), 0) INTO v_sk FROM seguro_dw_g30871276.dim_estado_contrato;
+    v_sk := COALESCE((SELECT MAX(sk_dim_estado_contrato) FROM seguro_dw_g30871276.dim_estado_contrato), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_estado_contrato', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_estado_contrato', v_sk, true); END IF;
 
     FOR r IN SELECT * FROM (VALUES
                 ('ACTIVO','Activo'), ('VENCIDO','Vencido'), ('SUSPENDIDO','Suspendido')
              ) AS v(cod_estado, descrip_estado)
     LOOP
         IF NOT EXISTS (SELECT 1 FROM seguro_dw_g30871276.dim_estado_contrato WHERE cod_estado = r.cod_estado) THEN
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_estado_contrato (sk_dim_estado_contrato, cod_estado, descrip_estado)
-            VALUES (v_sk, r.cod_estado, r.descrip_estado);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_estado_contrato'), r.cod_estado, r.descrip_estado);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -263,7 +298,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_EVALUACION_SERVICIO (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_evaluacion), 0) INTO v_sk FROM seguro_dw_g30871276.dim_evaluacion_servicio;
+    v_sk := COALESCE((SELECT MAX(sk_dim_evaluacion) FROM seguro_dw_g30871276.dim_evaluacion_servicio), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_evaluacion', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_evaluacion', v_sk, true); END IF;
 
     FOR r IN SELECT cod_evaluacion_servicio, nb_descripcion
              FROM seguro_g30871276.evaluacion_servicio ORDER BY cod_evaluacion_servicio
@@ -273,9 +310,8 @@ BEGIN
                SET nb_descrip = r.nb_descripcion WHERE cod_evaluacion_nk = r.cod_evaluacion_servicio;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_evaluacion_servicio (sk_dim_evaluacion, cod_evaluacion_nk, nb_descrip)
-            VALUES (v_sk, r.cod_evaluacion_servicio, r.nb_descripcion);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_evaluacion'), r.cod_evaluacion_servicio, r.nb_descripcion);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -295,7 +331,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_SUCURSAL (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_sucursal), 0) INTO v_sk FROM seguro_dw_g30871276.dim_sucursal;
+    v_sk := COALESCE((SELECT MAX(sk_dim_sucursal) FROM seguro_dw_g30871276.dim_sucursal), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_sucursal', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_sucursal', v_sk, true); END IF;
 
     FOR r IN SELECT su.cod_sucursal, su.nb_sucursal, ci.cod_ciudad, ci.nb_ciudad, pa.cod_pais, pa.nb_pais
              FROM seguro_g30871276.sucursal su
@@ -310,10 +348,9 @@ BEGIN
              WHERE cod_sucursal_nk = r.cod_sucursal;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_sucursal
                   (sk_dim_sucursal, cod_sucursal_nk, nb_sucursal, cod_ciudad, nb_ciudad, cod_pais, nb_pais)
-            VALUES (v_sk, r.cod_sucursal, r.nb_sucursal, r.cod_ciudad, r.nb_ciudad, r.cod_pais, r.nb_pais);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_sucursal'), r.cod_sucursal, r.nb_sucursal, r.cod_ciudad, r.nb_ciudad, r.cod_pais, r.nb_pais);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -333,7 +370,9 @@ DECLARE
     r RECORD; v_sk INTEGER; v_altas INTEGER := 0; v_cambios INTEGER := 0;
 BEGIN
     RAISE NOTICE '-> DIM_SINIESTRO (SCD1)';
-    SELECT COALESCE(MAX(sk_dim_siniestro), 0) INTO v_sk FROM seguro_dw_g30871276.dim_siniestro;
+    v_sk := COALESCE((SELECT MAX(sk_dim_siniestro) FROM seguro_dw_g30871276.dim_siniestro), 0);
+    IF v_sk = 0 THEN PERFORM setval('seguro_dw_g30871276.seq_dim_siniestro', 1, false);
+    ELSE PERFORM setval('seguro_dw_g30871276.seq_dim_siniestro', v_sk, true); END IF;
 
     FOR r IN SELECT nro_siniestro, descripcion_siniestro
              FROM seguro_g30871276.siniestro ORDER BY nro_siniestro
@@ -343,9 +382,8 @@ BEGIN
                SET descrip_siniestro = r.descripcion_siniestro WHERE nro_siniestro_nk = r.nro_siniestro;
             v_cambios := v_cambios + 1;
         ELSE
-            v_sk := v_sk + 1;
             INSERT INTO seguro_dw_g30871276.dim_siniestro (sk_dim_siniestro, nro_siniestro_nk, descrip_siniestro)
-            VALUES (v_sk, r.nro_siniestro, r.descripcion_siniestro);
+            VALUES (nextval('seguro_dw_g30871276.seq_dim_siniestro'), r.nro_siniestro, r.descripcion_siniestro);
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
@@ -376,8 +414,8 @@ BEGIN
              FROM seguro_g30871276.registro_contrato rc
              JOIN seguro_g30871276.cliente cl ON cl.cod_cliente = rc.cod_cliente
     LOOP
-        SELECT sk_dim_tiempo INTO v_sk_ini FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = r.fecha_inicio;
-        SELECT sk_dim_tiempo INTO v_sk_fin FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = r.fecha_fin;
+        v_sk_ini := seguro_dw_g30871276.fn_sk_tiempo(r.fecha_inicio);
+        v_sk_fin := seguro_dw_g30871276.fn_sk_tiempo(r.fecha_fin);
         SELECT sk_dim_cliente INTO v_sk_cli FROM seguro_dw_g30871276.dim_cliente WHERE cod_cliente_nk = r.cod_cliente;
         SELECT sk_dim_contrato INTO v_sk_con FROM seguro_dw_g30871276.dim_contrato WHERE nro_contrato_nk = r.nro_contrato;
         SELECT sk_dim_producto INTO v_sk_pro FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
@@ -446,12 +484,8 @@ BEGIN
              JOIN seguro_g30871276.registro_contrato rc ON rc.nro_contrato = rs.nro_contrato
              JOIN seguro_g30871276.cliente cl ON cl.cod_cliente = rc.cod_cliente
     LOOP
-        SELECT sk_dim_tiempo INTO v_sk_sin FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = r.fecha_siniestro;
-        IF r.fecha_respuesta IS NULL THEN
-            v_sk_resp := NULL;
-        ELSE
-            SELECT sk_dim_tiempo INTO v_sk_resp FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = r.fecha_respuesta;
-        END IF;
+        v_sk_sin  := seguro_dw_g30871276.fn_sk_tiempo(r.fecha_siniestro);
+        v_sk_resp := seguro_dw_g30871276.fn_sk_tiempo(r.fecha_respuesta);
         SELECT sk_dim_cliente  INTO v_sk_cli  FROM seguro_dw_g30871276.dim_cliente  WHERE cod_cliente_nk  = r.cod_cliente;
         SELECT sk_dim_contrato INTO v_sk_con  FROM seguro_dw_g30871276.dim_contrato WHERE nro_contrato_nk = r.nro_contrato;
         SELECT sk_dim_sucursal INTO v_sk_suc  FROM seguro_dw_g30871276.dim_sucursal WHERE cod_sucursal_nk = r.cod_sucursal;
@@ -523,7 +557,7 @@ BEGIN
             CONTINUE;
         END IF;
 
-        SELECT sk_dim_tiempo INTO v_sk_tiempo FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = v_fecha_eval;
+        v_sk_tiempo := seguro_dw_g30871276.fn_sk_tiempo(v_fecha_eval);
         SELECT sk_dim_cliente INTO v_sk_cli FROM seguro_dw_g30871276.dim_cliente WHERE cod_cliente_nk = r.cod_cliente;
         SELECT sk_dim_producto INTO v_sk_pro FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
         SELECT sk_dim_evaluacion INTO v_sk_eval FROM seguro_dw_g30871276.dim_evaluacion_servicio WHERE cod_evaluacion_nk = r.cod_evaluacion_servicio;
@@ -598,8 +632,9 @@ BEGIN
 
     FOR r IN SELECT anio, cod_producto, monto, meta_ren, meta_aseg FROM tmp_metas
     LOOP
-        SELECT sk_dim_tiempo INTO v_sk_ini FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = MAKE_DATE(r.anio, 1, 1);
-        SELECT sk_dim_tiempo INTO v_sk_fin FROM seguro_dw_g30871276.dim_tiempo WHERE fecha_completa = MAKE_DATE(r.anio, 12, 31);
+        -- Smart key directa: r.anio ya es el entero, no hace falta construir una fecha
+        v_sk_ini := r.anio * 10000 + 101;
+        v_sk_fin := r.anio * 10000 + 1231;
         SELECT sk_dim_producto INTO v_sk_pro FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
 
         UPDATE seguro_dw_g30871276.fact_metas
@@ -621,9 +656,8 @@ BEGIN
     DELETE FROM seguro_dw_g30871276.fact_metas f
     WHERE NOT EXISTS (
         SELECT 1 FROM tmp_metas m
-        JOIN seguro_dw_g30871276.dim_tiempo ti ON ti.fecha_completa = MAKE_DATE(m.anio, 1, 1)
         JOIN seguro_dw_g30871276.dim_producto dp ON dp.cod_producto_nk = m.cod_producto
-        WHERE ti.sk_dim_tiempo = f.sk_dim_fecha_inicio_meta AND dp.sk_dim_producto = f.sk_dim_producto);
+        WHERE (m.anio * 10000 + 101) = f.sk_dim_fecha_inicio_meta AND dp.sk_dim_producto = f.sk_dim_producto);
     GET DIAGNOSTICS v_borradas = ROW_COUNT;
 
     DROP TABLE IF EXISTS tmp_metas;

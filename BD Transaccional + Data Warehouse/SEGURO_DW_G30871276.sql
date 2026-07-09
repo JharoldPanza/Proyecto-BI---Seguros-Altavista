@@ -6,7 +6,7 @@ SET search_path TO SEGURO_DW_G30871276;
 -- 1. CREACIÓN DE DIMENSIONES
 
 CREATE TABLE DIM_TIEMPO (
-    sk_dim_tiempo SERIAL PRIMARY KEY,
+    sk_dim_tiempo INTEGER PRIMARY KEY,
     cod_annio INTEGER NOT NULL,
     cod_mes INTEGER NOT NULL,
     cod_dia_annio INTEGER,
@@ -23,7 +23,7 @@ CREATE TABLE DIM_TIEMPO (
 );
 
 CREATE TABLE DIM_CLIENTE (
-    sk_dim_cliente SERIAL PRIMARY KEY,
+    sk_dim_cliente INTEGER PRIMARY KEY,
     cod_cliente_nk INTEGER NOT NULL, 
     nb_cliente VARCHAR(150) NOT NULL,
     ci_rif VARCHAR(20) NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE DIM_CLIENTE (
 );
 
 CREATE TABLE DIM_PRODUCTO (
-    sk_dim_producto SERIAL PRIMARY KEY,
+    sk_dim_producto INTEGER PRIMARY KEY,
     cod_producto_nk INTEGER NOT NULL,
     nb_producto VARCHAR(100) NOT NULL,
     descrip_producto VARCHAR(255),
@@ -44,25 +44,25 @@ CREATE TABLE DIM_PRODUCTO (
 );
 
 CREATE TABLE DIM_CONTRATO (
-    sk_dim_contrato SERIAL PRIMARY KEY,
+    sk_dim_contrato INTEGER PRIMARY KEY,
     nro_contrato_nk INTEGER NOT NULL,
     descrip_contrato VARCHAR(255) NOT NULL
 );
 
 CREATE TABLE DIM_ESTADO_CONTRATO (
-    sk_dim_estado_contrato SERIAL PRIMARY KEY,
+    sk_dim_estado_contrato INTEGER PRIMARY KEY,
     cod_estado VARCHAR(20) NOT NULL, 
     descrip_estado VARCHAR(50) NOT NULL 
 );
 
 CREATE TABLE DIM_EVALUACION_SERVICIO (
-    sk_dim_evaluacion SERIAL PRIMARY KEY,
+    sk_dim_evaluacion INTEGER PRIMARY KEY,
     cod_evaluacion_nk INTEGER NOT NULL,
     nb_descrip VARCHAR(50) NOT NULL 
 );
 
 CREATE TABLE DIM_SUCURSAL (
-    sk_dim_sucursal SERIAL PRIMARY KEY,
+    sk_dim_sucursal INTEGER PRIMARY KEY,
     cod_sucursal_nk INTEGER NOT NULL,
     nb_sucursal VARCHAR(100) NOT NULL,
     cod_ciudad INTEGER,
@@ -72,7 +72,7 @@ CREATE TABLE DIM_SUCURSAL (
 );
 
 CREATE TABLE DIM_SINIESTRO (
-    sk_dim_siniestro SERIAL PRIMARY KEY,
+    sk_dim_siniestro INTEGER PRIMARY KEY,
     nro_siniestro_nk INTEGER NOT NULL,
     descrip_siniestro VARCHAR(255) NOT NULL
 );
