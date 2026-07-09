@@ -72,13 +72,13 @@ INSERT INTO RECOMIENDA (cod_cliente, cod_evaluacion_servicio, cod_producto, reco
 (1, 4, 2, 'SI'),
 (2, 5, 3, 'SI'),
 (3, 2, 6, 'NO'),
-(4, 3, 1, 'SI'),
+(4, 3, 5, 'SI'),
 (5, 5, 7, 'SI'),
-(6, 1, 4, 'NO'),
-(7, 4, 5, 'SI'),
-(8, 3, 6, 'SI'),
+(6, 1, 1, 'NO'),
+(7, 4, 8, 'SI'),
+(8, 3, 9, 'SI'),
 (9, 5, 10, 'SI'),
-(10, 2, 9, 'NO');
+(10, 2, 4, 'NO');
 
 -- 9. Insertar Contratos
 INSERT INTO CONTRATO (nro_contrato, descrip_contrato) VALUES 

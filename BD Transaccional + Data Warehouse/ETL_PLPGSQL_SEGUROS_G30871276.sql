@@ -35,8 +35,7 @@
 --      hechos que no aplican al grano (FACT_METAS).
 --
 --  Como ejecutarlo:
---    1) Requiere la fuente y el DW creados (puntos 1 y 2) y el
---       FIX_Consistencia_RECOMIENDA.sql aplicado una vez sobre la fuente.
+--    1) Requiere la fuente y el DW creados (puntos 1 y 2).
 --    2) Ejecutar este archivo completo (crea/reemplaza los procedimientos).
 --    3) Lanzar la carga con:   CALL seguro_dw_g30871276.sp_ejecutar_etl();
 --
