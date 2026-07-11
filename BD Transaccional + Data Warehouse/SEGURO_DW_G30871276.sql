@@ -138,15 +138,11 @@ CREATE TABLE FACT_EVALUACION_SERVICIO (
 CREATE TABLE FACT_METAS (
     sk_dim_fecha_inicio_meta INTEGER NOT NULL,
     sk_dim_fecha_fin_meta INTEGER NOT NULL,
-    sk_dim_cliente INTEGER NOT NULL,
     sk_dim_producto INTEGER NOT NULL,
-    sk_dim_contrato INTEGER NOT NULL,
     monto_meta_ingreso NUMERIC(18,2),
     meta_renovacion INTEGER,
     meta_asegurados INTEGER,
     CONSTRAINT fk_fact_metas_f_inicio FOREIGN KEY (sk_dim_fecha_inicio_meta) REFERENCES DIM_TIEMPO(sk_dim_tiempo),
     CONSTRAINT fk_fact_metas_f_fin FOREIGN KEY (sk_dim_fecha_fin_meta) REFERENCES DIM_TIEMPO(sk_dim_tiempo),
-    CONSTRAINT fk_fact_metas_cliente FOREIGN KEY (sk_dim_cliente) REFERENCES DIM_CLIENTE(sk_dim_cliente),
-    CONSTRAINT fk_fact_metas_producto FOREIGN KEY (sk_dim_producto) REFERENCES DIM_PRODUCTO(sk_dim_producto),
-    CONSTRAINT fk_fact_metas_contrato FOREIGN KEY (sk_dim_contrato) REFERENCES DIM_CONTRATO(sk_dim_contrato)
+    CONSTRAINT fk_fact_metas_producto FOREIGN KEY (sk_dim_producto) REFERENCES DIM_PRODUCTO(sk_dim_producto)
 );

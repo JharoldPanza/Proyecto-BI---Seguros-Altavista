@@ -36,9 +36,6 @@
 --      FACT_EVALUACION_SERVICIO : (sk_dim_cliente, sk_dim_producto)
 --      FACT_METAS               : (sk_dim_fecha_inicio_meta, sk_dim_producto)
 --
---    * Miembro por defecto -1 "NO APLICA" (patron Kimball) para las FK de los
---      hechos que no aplican al grano (FACT_METAS).
---
 --  Como ejecutarlo:
 --    1) Requiere la fuente y el DW creados (puntos 1 y 2).
 --    2) Ejecutar este archivo completo (crea/reemplaza los procedimientos).
@@ -167,12 +164,6 @@ BEGIN
         END IF;
     END LOOP;
 
-    IF NOT EXISTS (SELECT 1 FROM seguro_dw_g30871276.dim_cliente WHERE sk_dim_cliente = -1) THEN
-        INSERT INTO seguro_dw_g30871276.dim_cliente
-              (sk_dim_cliente, cod_cliente_nk, nb_cliente, ci_rif, telefono, direccion, sexo, email)
-        VALUES (-1, -1, 'NO APLICA', 'N/A', NULL, NULL, NULL, NULL);
-    END IF;
-
     RAISE NOTICE '   DIM_CLIENTE: % altas, % actualizaciones.', v_altas, v_cambios;
 END;
 $$;
@@ -247,11 +238,6 @@ BEGIN
             v_altas := v_altas + 1;
         END IF;
     END LOOP;
-
-    IF NOT EXISTS (SELECT 1 FROM seguro_dw_g30871276.dim_contrato WHERE sk_dim_contrato = -1) THEN
-        INSERT INTO seguro_dw_g30871276.dim_contrato (sk_dim_contrato, nro_contrato_nk, descrip_contrato)
-        VALUES (-1, -1, 'NO APLICA');
-    END IF;
 
     RAISE NOTICE '   DIM_CONTRATO: % altas, % actualizaciones.', v_altas, v_cambios;
 END;
@@ -604,7 +590,8 @@ $$;
 --      Clave de negocio: (sk_dim_fecha_inicio_meta, sk_dim_producto)
 --      Fuente real: hoja Excel de la Gerencia de Estadistica (Metas_Seguros.xlsx).
 --      Las 50 metas se cargan en una tabla temporal y desde ahi se hace el
---      upsert/synchronize (grano: meta anual por producto; cliente y contrato -1).
+--      upsert/synchronize (grano: meta anual por producto; sin cliente ni contrato,
+--      ese requerimiento no aplica al grano de una meta).
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_fact_metas()
 LANGUAGE plpgsql
@@ -638,15 +625,15 @@ BEGIN
         SELECT sk_dim_producto INTO v_sk_pro FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
 
         UPDATE seguro_dw_g30871276.fact_metas
-           SET sk_dim_fecha_fin_meta = v_sk_fin, sk_dim_cliente = -1, sk_dim_contrato = -1,
+           SET sk_dim_fecha_fin_meta = v_sk_fin,
                monto_meta_ingreso = r.monto, meta_renovacion = r.meta_ren, meta_asegurados = r.meta_aseg
          WHERE sk_dim_fecha_inicio_meta = v_sk_ini AND sk_dim_producto = v_sk_pro;
 
         IF NOT FOUND THEN
             INSERT INTO seguro_dw_g30871276.fact_metas
-                  (sk_dim_fecha_inicio_meta, sk_dim_fecha_fin_meta, sk_dim_cliente,
-                   sk_dim_producto, sk_dim_contrato, monto_meta_ingreso, meta_renovacion, meta_asegurados)
-            VALUES (v_sk_ini, v_sk_fin, -1, v_sk_pro, -1, r.monto, r.meta_ren, r.meta_aseg);
+                  (sk_dim_fecha_inicio_meta, sk_dim_fecha_fin_meta,
+                   sk_dim_producto, monto_meta_ingreso, meta_renovacion, meta_asegurados)
+            VALUES (v_sk_ini, v_sk_fin, v_sk_pro, r.monto, r.meta_ren, r.meta_aseg);
             v_altas := v_altas + 1;
         ELSE
             v_cambios := v_cambios + 1;
