@@ -35,6 +35,7 @@
 --      FACT_REGISTRO_SINIESTRO  : (sk_dim_siniestro, sk_dim_contrato)
 --      FACT_EVALUACION_SERVICIO : (sk_dim_cliente, sk_dim_producto)
 --      FACT_METAS               : (sk_dim_fecha_inicio_meta, sk_dim_producto)
+--                                 [fuente: Excel via sync_metas_excel.py -> stg_metas_excel]
 --
 --  Como ejecutarlo:
 --    1) Requiere la fuente y el DW creados (puntos 1 y 2).
@@ -588,67 +589,91 @@ $$;
 -- ============================================================================
 --  12. FACT_METAS  (INCREMENTAL: upsert + synchronize)
 --      Clave de negocio: (sk_dim_fecha_inicio_meta, sk_dim_producto)
---      Fuente real: hoja Excel de la Gerencia de Estadistica (Metas_Seguros.xlsx).
---      Las 50 metas se cargan en una tabla temporal y desde ahi se hace el
---      upsert/synchronize (grano: meta anual por producto; sin cliente ni contrato,
---      ese requerimiento no aplica al grano de una meta).
+--      FUENTE REAL: hoja Excel de la Gerencia de Estadistica (Metas_Seguros.xlsx).
+--      El script sync_metas_excel.py (Python) la valida y la vuelca en la tabla
+--      de staging stg_metas_excel; este procedimiento carga el hecho DESDE ese
+--      staging (grano: meta anual por producto; sin cliente ni contrato, esas
+--      dimensiones no pertenecen al grano de una meta corporativa).
+--      Si el staging esta vacio (aun no se corrio el sync), el paso se omite
+--      sin tocar el hecho.
 -- ============================================================================
+CREATE TABLE IF NOT EXISTS seguro_g30871276.stg_metas_excel (
+    anio                INTEGER        NOT NULL,
+    cod_producto        INTEGER        NOT NULL,
+    monto_meta_ingreso  NUMERIC(18,2)  NOT NULL,
+    meta_renovacion     INTEGER        NOT NULL,
+    meta_asegurados     INTEGER        NOT NULL,
+    fecha_carga         TIMESTAMP      NOT NULL DEFAULT now(),
+    CONSTRAINT pk_stg_metas PRIMARY KEY (anio, cod_producto)
+);
+
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_fact_metas()
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    r RECORD; v_sk_ini INTEGER; v_sk_fin INTEGER; v_sk_pro INTEGER;
+    r RECORD;
+    v_sk_ini INTEGER; v_sk_fin INTEGER; v_sk_pro INTEGER;
+    v_filas  INTEGER;
     v_altas INTEGER := 0; v_cambios INTEGER := 0; v_borradas INTEGER := 0;
 BEGIN
-    RAISE NOTICE '-> FACT_METAS (incremental: upsert + synchronize)';
+    RAISE NOTICE '-> FACT_METAS (incremental desde stg_metas_excel: upsert + synchronize)';
 
-    -- Cargar las metas (origen: hoja Excel) en una tabla temporal
-    DROP TABLE IF EXISTS tmp_metas;
-    CREATE TEMP TABLE tmp_metas (anio int, cod_producto int, monto numeric(18,2), meta_ren int, meta_aseg int);
-    INSERT INTO tmp_metas VALUES
-        (2022,1,260.00,1,2),(2022,2,960.00,1,1),(2022,3,585.00,1,2),(2022,4,144.00,1,1),(2022,5,390.00,1,2),
-        (2022,6,2000.00,1,1),(2022,7,195.00,1,2),(2022,8,640.00,1,1),(2022,9,780.00,1,2),(2022,10,96.00,1,1),
-        (2023,1,160.00,1,1),(2023,2,1560.00,1,2),(2023,3,360.00,1,1),(2023,4,234.00,1,2),(2023,5,240.00,1,1),
-        (2023,6,3250.00,1,2),(2023,7,120.00,1,1),(2023,8,1040.00,1,2),(2023,9,480.00,1,1),(2023,10,156.00,1,2),
-        (2024,1,260.00,1,2),(2024,2,960.00,1,1),(2024,3,585.00,1,2),(2024,4,144.00,1,1),(2024,5,390.00,1,2),
-        (2024,6,2000.00,1,1),(2024,7,195.00,1,2),(2024,8,640.00,1,1),(2024,9,780.00,1,2),(2024,10,96.00,1,1),
-        (2025,1,160.00,1,1),(2025,2,1560.00,1,2),(2025,3,360.00,1,1),(2025,4,234.00,1,2),(2025,5,240.00,1,1),
-        (2025,6,3250.00,1,2),(2025,7,120.00,1,1),(2025,8,1040.00,1,2),(2025,9,480.00,1,1),(2025,10,156.00,1,2),
-        (2026,1,260.00,1,2),(2026,2,960.00,1,1),(2026,3,585.00,1,2),(2026,4,144.00,1,1),(2026,5,390.00,1,2),
-        (2026,6,2000.00,1,1),(2026,7,195.00,1,2),(2026,8,640.00,1,1),(2026,9,780.00,1,2),(2026,10,96.00,1,1);
+    SELECT COUNT(*) INTO v_filas FROM seguro_g30871276.stg_metas_excel;
+    IF v_filas = 0 THEN
+        RAISE NOTICE '   FACT_METAS: staging vacio; no se toca el hecho. Ejecute sync_metas_excel.py.';
+        RETURN;
+    END IF;
 
-    FOR r IN SELECT anio, cod_producto, monto, meta_ren, meta_aseg FROM tmp_metas
+    -- Prerrequisito: las dimensiones deben estar cargadas antes que los hechos
+    IF NOT EXISTS (SELECT 1 FROM seguro_dw_g30871276.dim_producto) THEN
+        RAISE EXCEPTION 'FACT_METAS: DIM_PRODUCTO esta vacia. Ejecute primero el ETL completo: CALL seguro_dw_g30871276.sp_ejecutar_etl(); y luego vuelva a correr sync_metas_excel.py.';
+    END IF;
+
+    FOR r IN SELECT anio, cod_producto, monto_meta_ingreso, meta_renovacion, meta_asegurados
+             FROM seguro_g30871276.stg_metas_excel
     LOOP
-        -- Smart key directa: r.anio ya es el entero, no hace falta construir una fecha
+        -- Smart key AAAAMMDD: la meta cubre el anio calendario completo
         v_sk_ini := r.anio * 10000 + 101;
         v_sk_fin := r.anio * 10000 + 1231;
-        SELECT sk_dim_producto INTO v_sk_pro FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
 
+        SELECT sk_dim_producto INTO v_sk_pro
+          FROM seguro_dw_g30871276.dim_producto WHERE cod_producto_nk = r.cod_producto;
+        IF v_sk_pro IS NULL THEN
+            RAISE EXCEPTION 'FACT_METAS: cod_producto % (anio %) no existe en DIM_PRODUCTO. Corrija el Excel.',
+                            r.cod_producto, r.anio;
+        END IF;
+
+        -- UPSERT por la clave de negocio del hecho: (anio, producto)
         UPDATE seguro_dw_g30871276.fact_metas
            SET sk_dim_fecha_fin_meta = v_sk_fin,
-               monto_meta_ingreso = r.monto, meta_renovacion = r.meta_ren, meta_asegurados = r.meta_aseg
+               monto_meta_ingreso = r.monto_meta_ingreso,
+               meta_renovacion = r.meta_renovacion,
+               meta_asegurados = r.meta_asegurados
          WHERE sk_dim_fecha_inicio_meta = v_sk_ini AND sk_dim_producto = v_sk_pro;
 
         IF NOT FOUND THEN
             INSERT INTO seguro_dw_g30871276.fact_metas
-                  (sk_dim_fecha_inicio_meta, sk_dim_fecha_fin_meta,
-                   sk_dim_producto, monto_meta_ingreso, meta_renovacion, meta_asegurados)
-            VALUES (v_sk_ini, v_sk_fin, v_sk_pro, r.monto, r.meta_ren, r.meta_aseg);
+                  (sk_dim_fecha_inicio_meta, sk_dim_fecha_fin_meta, sk_dim_producto,
+                   monto_meta_ingreso, meta_renovacion, meta_asegurados)
+            VALUES (v_sk_ini, v_sk_fin, v_sk_pro,
+                    r.monto_meta_ingreso, r.meta_renovacion, r.meta_asegurados);
             v_altas := v_altas + 1;
         ELSE
             v_cambios := v_cambios + 1;
         END IF;
     END LOOP;
 
+    -- SYNCHRONIZE: si una meta desaparece del Excel, desaparece del hecho
     DELETE FROM seguro_dw_g30871276.fact_metas f
     WHERE NOT EXISTS (
-        SELECT 1 FROM tmp_metas m
+        SELECT 1 FROM seguro_g30871276.stg_metas_excel m
         JOIN seguro_dw_g30871276.dim_producto dp ON dp.cod_producto_nk = m.cod_producto
-        WHERE (m.anio * 10000 + 101) = f.sk_dim_fecha_inicio_meta AND dp.sk_dim_producto = f.sk_dim_producto);
+        WHERE (m.anio * 10000 + 101) = f.sk_dim_fecha_inicio_meta
+          AND dp.sk_dim_producto    = f.sk_dim_producto);
     GET DIAGNOSTICS v_borradas = ROW_COUNT;
 
-    DROP TABLE IF EXISTS tmp_metas;
-    RAISE NOTICE '   FACT_METAS: % altas, % actualizaciones, % eliminadas.', v_altas, v_cambios, v_borradas;
+    RAISE NOTICE '   FACT_METAS: % altas, % actualizaciones, % eliminadas (fuente: % filas del Excel).',
+                 v_altas, v_cambios, v_borradas, v_filas;
 END;
 $$;
 
