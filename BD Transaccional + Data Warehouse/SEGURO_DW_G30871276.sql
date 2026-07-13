@@ -77,7 +77,7 @@ CREATE TABLE DIM_SINIESTRO (
     descrip_siniestro VARCHAR(255) NOT NULL
 );
 
--- 2. CREACIÓN DE TABLAS DE HECHOS (FACT)
+-- 2. CREACIÓN DE TABLAS DE HECHOS
 
 CREATE TABLE FACT_REGISTRO_CONTRATO (
     sk_dim_tiempo_fecha_inicio INTEGER NOT NULL,
@@ -86,7 +86,7 @@ CREATE TABLE FACT_REGISTRO_CONTRATO (
     sk_dim_contrato INTEGER NOT NULL,
     sk_dim_producto INTEGER NOT NULL,
     sk_dim_estado_contrato INTEGER NOT NULL,
-    sk_dim_sucursal INTEGER NOT NULL, -- Corrección integrada: Para el Indicador 7
+    sk_dim_sucursal INTEGER NOT NULL, 
     monto NUMERIC(18,2), 
     cantidad INTEGER DEFAULT 1,
     cantidad_cliente INTEGER,
@@ -123,7 +123,7 @@ CREATE TABLE FACT_REGISTRO_SINIESTRO (
 );
 
 CREATE TABLE FACT_EVALUACION_SERVICIO (
-    sk_dim_tiempo_evaluacion INTEGER NOT NULL, -- Corrección integrada: Para el Indicador 9
+    sk_dim_tiempo_evaluacion INTEGER NOT NULL, 
     sk_dim_cliente INTEGER NOT NULL,
     sk_dim_producto INTEGER NOT NULL,
     sk_dim_evaluacion_servicio INTEGER NOT NULL,

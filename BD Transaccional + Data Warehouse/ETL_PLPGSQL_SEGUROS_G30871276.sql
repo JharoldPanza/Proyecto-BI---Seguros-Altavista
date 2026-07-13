@@ -6,37 +6,7 @@
 --  Que es este archivo:
 --    El proceso de Extraccion, Transformacion y Carga (ETL) escrito como
 --    PROCEDIMIENTOS ALMACENADOS. Cada dimension y cada hecho tiene su propio
---    procedimiento; un procedimiento ORQUESTADOR (sp_ejecutar_etl) los invoca
---    en el orden correcto -es el equivalente en codigo al "Job" de Pentaho-.
---
---  Patrones aplicados:
---    * Dimensiones : SCD Tipo 1. Se recorre la fuente FILA POR FILA con un
---                    CURSOR; si la clave natural ya existe se hace UPDATE, si no,
---                    se INSERTA con una clave subrogada generada por una SECUENCIA
---                    de PostgreSQL (nextval) -el conteo lo lleva el motor, no un
---                    calculo manual-.
---    * DIM_TIEMPO  : GENERADA, no extraida. Bucle WHILE dia a dia 2018-2031.
---                    Usa SMART KEY: la clave subrogada es la fecha en formato
---                    AAAAMMDD (ej. 2024-03-01 -> 20240301), no un correlativo.
---                    Asi, al ver la SK en una tabla de hechos se lee la fecha
---                    directamente, sin necesidad de cruzar con DIM_TIEMPO.
---    * Hechos      : CARGA INCREMENTAL (patron Merge + Synchronize de la catedra),
---                    NO full refresh. Por cada registro de la fuente:
---                      - se resuelven las SK con lookups,
---                      - UPSERT por la CLAVE DE NEGOCIO del hecho: si ya existe
---                        una fila con esa clave se ACTUALIZA (medidas/atributos),
---                        si no existe se INSERTA;
---                    y al final un paso de SYNCHRONIZE que ELIMINA del hecho las
---                    filas cuya clave de negocio ya no existe en la fuente.
---                    No se vacia la tabla: solo se aplican las diferencias.
---
---    Claves de negocio usadas para el upsert de cada hecho:
---      FACT_REGISTRO_CONTRATO   : (sk_dim_contrato, sk_dim_producto, sk_dim_cliente)
---      FACT_REGISTRO_SINIESTRO  : (sk_dim_siniestro, sk_dim_contrato)
---      FACT_EVALUACION_SERVICIO : (sk_dim_cliente, sk_dim_producto)
---      FACT_METAS               : (sk_dim_fecha_inicio_meta, sk_dim_producto)
---                                 [fuente: Excel via sync_metas_excel.py -> stg_metas_excel]
---
+--    procedimiento; un procedimiento ORQUESTADOR (sp_ejecutar_etl) 
 --  Como ejecutarlo:
 --    1) Requiere la fuente y el DW creados (puntos 1 y 2).
 --    2) Ejecutar este archivo completo (crea/reemplaza los procedimientos).
@@ -50,9 +20,7 @@
 SET search_path TO seguro_dw_g30871276;
 
 -- ----------------------------------------------------------------------------
---  Secuencias para las claves subrogadas de las dimensiones (una por dimension).
---  El motor lleva el conteo con nextval(); cada procedimiento sincroniza su
---  secuencia con el estado actual de la tabla antes de insertar (idempotencia).
+--  Secuencias para las claves subrogadas de las dimensiones.
 --  DIM_TIEMPO no usa secuencia: su clave es una smart key AAAAMMDD.
 -- ----------------------------------------------------------------------------
 CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_cliente;
@@ -64,9 +32,7 @@ CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_sucursal;
 CREATE SEQUENCE IF NOT EXISTS seguro_dw_g30871276.seq_dim_siniestro;
 
 -- ----------------------------------------------------------------------------
---  Smart Key de DIM_TIEMPO: la SK de una fecha se CALCULA, no se busca.
---  STRICT: si p_fecha es NULL, devuelve NULL sin necesidad de IF en el caller
---  (caso de sk_fecha_respuesta en FACT_REGISTRO_SINIESTRO, que puede no existir).
+--  SK de DIM_TIEMPO: la SK de una fecha se CALCULA.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION seguro_dw_g30871276.fn_sk_tiempo(p_fecha DATE)
 RETURNS INTEGER
@@ -81,7 +47,7 @@ $$;
 
 -- ============================================================================
 --  1. DIM_TIEMPO  (generada con un bucle dia a dia)
---     Convencion dia_semana: 1=Domingo ... 7=Sabado (misma que Pentaho).
+--     Convencion dia_semana: 1=Domingo ... 7=Sabado.
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_tiempo()
 LANGUAGE plpgsql
@@ -135,7 +101,7 @@ $$;
 
 
 -- ============================================================================
---  2. DIM_CLIENTE  (SCD1 por cod_cliente_nk) + miembro -1
+--  2. DIM_CLIENTE 
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_cliente()
 LANGUAGE plpgsql
@@ -171,7 +137,7 @@ $$;
 
 
 -- ============================================================================
---  3. DIM_PRODUCTO  (desnormaliza PRODUCTO + TIPO_PRODUCTO; SCD1)
+--  3. DIM_PRODUCTO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_producto()
 LANGUAGE plpgsql
@@ -213,7 +179,7 @@ $$;
 
 
 -- ============================================================================
---  4. DIM_CONTRATO  (SCD1 por nro_contrato_nk) + miembro -1
+--  4. DIM_CONTRATO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_contrato()
 LANGUAGE plpgsql
@@ -246,7 +212,7 @@ $$;
 
 
 -- ============================================================================
---  5. DIM_ESTADO_CONTRATO  (dominio fijo)
+--  5. DIM_ESTADO_CONTRATO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_estado_contrato()
 LANGUAGE plpgsql
@@ -276,7 +242,7 @@ $$;
 
 
 -- ============================================================================
---  6. DIM_EVALUACION_SERVICIO  (SCD1 por cod_evaluacion_nk)
+--  6. DIM_EVALUACION_SERVICIO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_evaluacion_servicio()
 LANGUAGE plpgsql
@@ -309,7 +275,7 @@ $$;
 
 
 -- ============================================================================
---  7. DIM_SUCURSAL  (desnormaliza SUCURSAL + CIUDAD + PAIS; SCD1)
+--  7. DIM_SUCURSA
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_sucursal()
 LANGUAGE plpgsql
@@ -348,7 +314,7 @@ $$;
 
 
 -- ============================================================================
---  8. DIM_SINIESTRO  (SCD1 por nro_siniestro_nk)
+--  8. DIM_SINIESTRO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_dim_siniestro()
 LANGUAGE plpgsql
@@ -381,9 +347,7 @@ $$;
 
 
 -- ============================================================================
---  9. FACT_REGISTRO_CONTRATO  (INCREMENTAL: upsert + synchronize)
---     Clave de negocio: (sk_dim_contrato, sk_dim_producto, sk_dim_cliente)
---     Sucursal del hecho = sucursal de captacion del cliente.
+--  9. FACT_REGISTRO_CONTRATO 
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_fact_registro_contrato()
 LANGUAGE plpgsql
@@ -448,10 +412,7 @@ $$;
 
 
 -- ============================================================================
---  10. FACT_REGISTRO_SINIESTRO  (INCREMENTAL: upsert + synchronize)
---      Clave de negocio: (sk_dim_siniestro, sk_dim_contrato)
---      Cliente/producto se derivan del contrato; sucursal, del cliente.
---      sk_fecha_respuesta = NULL si el siniestro aun no tiene respuesta.
+--  10. FACT_REGISTRO_SINIESTRO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_fact_registro_siniestro()
 LANGUAGE plpgsql
@@ -515,11 +476,7 @@ $$;
 
 
 -- ============================================================================
---  11. FACT_EVALUACION_SERVICIO  (INCREMENTAL: upsert + synchronize)
---      Clave de negocio: (sk_dim_cliente, sk_dim_producto)
---      Fecha de evaluacion = fecha_fin del ULTIMO contrato del par (cliente,producto).
---      Filtro de calidad: si el par no tiene contrato, se descarta la evaluacion.
---      recomienda_amigo: SI -> 1.00, NO -> 0.00.
+--  11. FACT_EVALUACION_SERVICIO
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_cargar_fact_evaluacion_servicio()
 LANGUAGE plpgsql
@@ -568,7 +525,6 @@ BEGIN
     END LOOP;
 
     -- SYNCHRONIZE: eliminar evaluaciones cuyo par (cliente,producto) ya no exista
-    -- en la fuente con contrato valido (incluye las que se volvieron huerfanas).
     DELETE FROM seguro_dw_g30871276.fact_evaluacion_servicio f
     WHERE NOT EXISTS (
         SELECT 1 FROM seguro_g30871276.recomienda rr
@@ -588,14 +544,10 @@ $$;
 
 -- ============================================================================
 --  12. FACT_METAS  (INCREMENTAL: upsert + synchronize)
---      Clave de negocio: (sk_dim_fecha_inicio_meta, sk_dim_producto)
---      FUENTE REAL: hoja Excel de la Gerencia de Estadistica (Metas_Seguros.xlsx).
---      El script sync_metas_excel.py (Python) la valida y la vuelca en la tabla
+--      FUENTE REAL: hoja Excel Metas_Seguros.xlsx.
+--      El script sync_metas_excel.py la valida y la vuelca en la tabla
 --      de staging stg_metas_excel; este procedimiento carga el hecho DESDE ese
---      staging (grano: meta anual por producto; sin cliente ni contrato, esas
---      dimensiones no pertenecen al grano de una meta corporativa).
---      Si el staging esta vacio (aun no se corrio el sync), el paso se omite
---      sin tocar el hecho.
+--      staging 
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS seguro_g30871276.stg_metas_excel (
     anio                INTEGER        NOT NULL,
@@ -679,7 +631,7 @@ $$;
 
 
 -- ============================================================================
---  ORQUESTADOR  (equivalente al Job de Pentaho)
+--  ORQUESTADOR 
 -- ============================================================================
 CREATE OR REPLACE PROCEDURE seguro_dw_g30871276.sp_ejecutar_etl()
 LANGUAGE plpgsql
@@ -716,6 +668,6 @@ END;
 $$;
 
 -- ============================================================================
---  FIN. Para ejecutar la carga:
+--  Para ejecutar la carga:
 --      CALL seguro_dw_g30871276.sp_ejecutar_etl();
 -- ============================================================================

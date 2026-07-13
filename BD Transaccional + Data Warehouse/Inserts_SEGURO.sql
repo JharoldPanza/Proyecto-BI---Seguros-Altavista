@@ -59,7 +59,7 @@ INSERT INTO CLIENTE (cod_cliente, nb_cliente, ci_rif, telefono, direccion, sexo,
 (9, 'Elena Ríos', 'PE-999888', '600-9990011', 'San Francisco, Panamá', 'F', 'elena.rios@email.pa', 7),
 (10, 'Miguel Torres', 'V-10222333', '0424-0001122', 'La Candelaria, Caracas', 'M', 'miguel.torres@email.com', 1);
 
--- 7. Insertar Evaluaciones de Servicio (Restricción estricta del 1 al 5)
+-- 7. Insertar Evaluaciones de Servicio 
 INSERT INTO EVALUACION_SERVICIO (cod_evaluacion_servicio, nb_descripcion) VALUES 
 (1, 'MALO'),
 (2, 'REGULAR'),
@@ -67,7 +67,7 @@ INSERT INTO EVALUACION_SERVICIO (cod_evaluacion_servicio, nb_descripcion) VALUES
 (4, 'MUY BUENO'),
 (5, 'EXCELENTE');
 
--- 8. Insertar Recomendaciones (RECOMIENDA)
+-- 8. Insertar Recomendaciones 
 INSERT INTO RECOMIENDA (cod_cliente, cod_evaluacion_servicio, cod_producto, recomienda_amigo) VALUES 
 (1, 4, 2, 'SI'),
 (2, 5, 3, 'SI'),
@@ -132,15 +132,8 @@ INSERT INTO REGISTRO_SINIESTRO (nro_siniestro, nro_contrato, fecha_siniestro, fe
 (9, 3, '2023-11-05', '2023-11-30', 'NO', 15000.00, 18000.00),
 (10, 1, '2024-04-18', NULL, 'NO', NULL, 1200.00); -- Siniestro en proceso (sin fecha de respuesta aún)
 
--- ============================================================================
---  13. Volumen adicional para pruebas de indicadores del dashboard
---      (rompe la biyeccion 1:1:1 cliente/contrato/producto de la semilla base
---      y cubre huecos detectados: sucursal 8 sin clientes, ano 2026 sin
---      contratos, evaluaciones RECOMIENDA repartidas 1 por producto, y el
---      filtro de calidad de FACT_EVALUACION_SERVICIO nunca ejercitado).
--- ============================================================================
 
--- 6b. Insertar Clientes adicionales (volumen para pruebas de indicadores)
+-- 6b. Insertar Clientes adicionales 
 INSERT INTO CLIENTE (cod_cliente, nb_cliente, ci_rif, telefono, direccion, sexo, email, cod_sucursal) VALUES
 (11, 'Pedro Alvarez 11', 'V-10001903', '0414-1000407', 'Direccion Demo 11, Caracas', 'M', 'cliente11@email.com', 1),
 (12, 'Daniela Reyes 12', 'V-10002076', '0414-1000444', 'Direccion Demo 12, Caracas', 'F', 'cliente12@email.com', 1),
@@ -158,7 +151,7 @@ INSERT INTO CLIENTE (cod_cliente, nb_cliente, ci_rif, telefono, direccion, sexo,
 (24, 'Manuel Vargas 24', 'ES-40007944', '+34-624-101704', 'Direccion Demo 24, Madrid', 'M', 'cliente24@email.com', 8),
 (25, 'Ricardo Nunez 25', 'ES-40008275', '+34-625-101775', 'Direccion Demo 25, Madrid', 'M', 'cliente25@email.com', 8);
 
--- 8b. Insertar Recomendaciones adicionales (incluye pares sin contrato -> prueba de descarte por calidad)
+-- 8b. Insertar Recomendaciones adicionales
 INSERT INTO RECOMIENDA (cod_cliente, cod_evaluacion_servicio, cod_producto, recomienda_amigo) VALUES
 (18, 2, 1, 'NO'),
 (3, 4, 1, 'SI'),
@@ -182,9 +175,9 @@ INSERT INTO RECOMIENDA (cod_cliente, cod_evaluacion_servicio, cod_producto, reco
 (16, 1, 10, 'NO'),
 (3, 5, 10, 'SI'),
 (14, 4, 10, 'SI'),
-(21, 2, 1, 'SI'),  -- huerfana: sin contrato para este par
-(7, 4, 1, 'SI'),  -- huerfana: sin contrato para este par
-(19, 3, 4, 'NO');  -- huerfana: sin contrato para este par
+(21, 2, 1, 'SI'),  
+(7, 4, 1, 'SI'),  
+(19, 3, 4, 'NO');  
 
 -- 9b. Insertar Contratos adicionales
 INSERT INTO CONTRATO (nro_contrato, descrip_contrato) VALUES
