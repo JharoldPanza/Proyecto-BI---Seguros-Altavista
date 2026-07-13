@@ -1,53 +1,27 @@
 # Proyecto BI — Seguros Alta Vista
 
-Solución de Inteligencia de Negocios (UCAB, Marzo–Julio 2026).
+Solución de Inteligencia de Negocios para Seguros Alta Vista (UCAB, Marzo–Julio 2026).
 Panza / Mejía / De Sousa — Prof. Concettina Di Vasta.
 
-## Estructura del repositorio
+## Qué Se necesita antes de empezar
 
-```
-BD Transaccional + Data Warehouse/
-  SEGURO_G30871276.sql               BD transaccional (fuente) — PostgreSQL
-  Inserts_SEGURO.sql                 Datos de prueba de la fuente
-  SEGURO_DW_G30871276.sql            Data Warehouse (constelación: 4 hechos, 8 dimensiones)
-  ETL_PLPGSQL_SEGUROS_G30871276.sql  ETL en PL/pgSQL: SCD1, smart key AAAAMMDD,
-                                     carga incremental (upsert + synchronize)
-  Defensa_EnVivo.sql                 Guion de la demo incremental para la defensa
-Integracion Excel Metas/
-  Metas_Seguros.xlsx                 Hoja de metas de la Gerencia de Estadística
-                                     (fuente real de FACT_METAS)
-  sync_metas_excel.py                Sincronizador Excel -> staging -> FACT_METAS
-  requirements.txt                   Dependencias Python
-```
+- PostgreSQL instalado y corriendo.
+- Un cliente para ejecutar archivos `.sql` (psql, pgAdmin).
+- Python 3.
 
-## Orden de ejecución (desde cero)
+## Cómo levantar el proyecto
 
-```
-1. SEGURO_G30871276.sql          -- crea el esquema fuente
-2. Inserts_SEGURO.sql            -- datos de prueba (correr con search_path=seguro_g30871276)
-3. SEGURO_DW_G30871276.sql       -- crea el DW
-4. ETL_PLPGSQL_SEGUROS_G30871276.sql   -- crea procedimientos + staging de metas
-5. CALL seguro_dw_g30871276.sp_ejecutar_etl();   -- carga dimensiones y hechos
-                                                 -- (FACT_METAS se omite: staging aun vacio)
-6. pip install -r "Integracion Excel Metas/requirements.txt"
-7. python sync_metas_excel.py --excel Metas_Seguros.xlsx   -- carga las metas del Excel
-```
+Correr en este orden. Los primeros cinco pasos están dentro de la carpeta `BD Transaccional + Data Warehouse/`.
 
-Notas:
-- El ETL completo (paso 5) debe correr ANTES del primer sync: FACT_METAS
-  referencia DIM_PRODUCTO, y las dimensiones las carga el ETL. Despues de la
-  primera carga, el sync puede correrse solo, cuantas veces se quiera.
-- `sync_metas_excel.py --watch` deja el sincronizador vigilando el Excel y
-  aplica los cambios (altas, modificaciones y bajas de metas) automáticamente.
-- Conexión del script: parámetros CLI (`--host --port --dbname --user --password`)
-  o variables de entorno estándar `PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD`.
+1. **`SEGURO_G30871276.sql`** — crea la base de datos transaccional.
+2. **`Inserts_SEGURO.sql`** — carga los datos de prueba en esa base.
+3. **`SEGURO_DW_G30871276.sql`** — crea el Data Warehouse.
+4. **`ETL_PLPGSQL_SEGUROS_G30871276.sql`** — crea todo lo necesario para migrar los datos de la fuente al Data Warehouse.
+5. Ejecutar la migración llamando a:
+   ```sql
+   CALL seguro_dw_g30871276.sp_ejecutar_etl();
+   ```
+   Se puede correr las veces que se quiera: cada corrida solo trae lo nuevo, actualiza lo que cambió, y no duplica nada.
+6. **Cargar las metas desde Excel.** Las metas anuales estan en un archivo excel en la carpeta `Integracion Excel Metas/Metas_Seguros.xlsx`. Para traerlas al Data Warehouse hay un script de Python (`sync_metas_excel.py`) con su propia guía completa en **`Configuracion_Script_Python.md`** — instalación, cómo conectarlo a la base y cómo dejarlo corriendo automáticamente ante cambios en el Excel.
 
-## Flujo de las metas (Excel -> DW)
 
-```
-Metas_Seguros.xlsx (hoja METAS)
-   -> sync_metas_excel.py: valida (columnas, tipos, duplicados, nulos)
-   -> TRUNCATE + INSERT en seguro_g30871276.stg_metas_excel   [1 transacción]
-   -> CALL sp_cargar_fact_metas()  (upsert + synchronize)     [misma transacción]
-   -> COMMIT  (ROLLBACK total ante cualquier error: el DW nunca queda a medias)
-```
